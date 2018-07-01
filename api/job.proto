@@ -12,6 +12,12 @@ service Log {
     rpc GetStream(LogStreamReq) returns (stream LogStreamResp) {}
 }
 
+enum JobStatus {
+    init = 0;
+    running = 1;
+    finished = 2;
+}
+
 message InitReq {
 }
 
@@ -31,6 +37,7 @@ message LogReq {
 }
 message LogResp {
     repeated string lines = 1;
+    JobStatus status = 2;
 }
 message LogStreamReq {
     uint32 id = 1;
