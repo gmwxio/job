@@ -40,17 +40,21 @@ func (ps *JobSvr) Init(ctx context.Context, req *api.InitReq) (*api.InitResp, er
 	return &api.InitResp{Id: jb.ID}, nil
 }
 func (ps *JobSvr) Run(ctx context.Context, req *api.RunReq) (*api.RunResp, error) {
+	jmu.Lock()
 	if req.Id > uint32(len(jobs)) {
+		jmu.Unlock()
 		return nil, errors.New("job id is out of bounds")
 	}
 	jb := jobs[req.Id-1]
+	jmu.Unlock()
 	go jb.run()
-	jb.Status = api.JobStatus_running
 	return &api.RunResp{}, nil
 }
 
 func (ls *LogSvr) Get(ctx context.Context, req *api.LogReq) (*api.LogResp, error) {
+	jmu.Lock()
 	if req.Id > uint32(len(jobs)) {
+		jmu.Unlock()
 		return nil, errors.New("job id is out of bounds")
 	}
 	jb := jobs[req.Id-1]
@@ -58,21 +62,26 @@ func (ls *LogSvr) Get(ctx context.Context, req *api.LogReq) (*api.LogResp, error
 		Lines:  jb.Logs,
 		Status: jb.Status,
 	}
+	jmu.Unlock()
 	return resp, nil
 }
 func (ls *LogSvr) GetStream(req *api.LogStreamReq, resp api.Log_GetStreamServer) error {
+	jmu.Lock()
 	if req.Id > uint32(len(jobs)) {
+		jmu.Unlock()
 		return errors.New("job id is out of bounds")
 	}
 	jb := jobs[req.Id-1]
-	jmu.Lock()
 	if jb.logClient != nil {
+		jmu.Unlock()
 		return errors.New("client already listening to log")
 	}
 	jb.logClient = make(chan string, 0)
 	jmu.Unlock()
 	defer func() {
+		jmu.Lock()
 		jb.logClient = nil
+		jmu.Unlock()
 	}()
 	for line := range jb.logClient {
 		err := resp.Send(&api.LogStreamResp{Line: line})
@@ -84,6 +93,7 @@ func (ls *LogSvr) GetStream(req *api.LogStreamReq, resp api.Log_GetStreamServer)
 }
 
 func (jb *job) run() {
+	jb.Status = api.JobStatus_running
 	i := 0
 	for {
 		line := fmt.Sprintf("At the beep the time will be %v, ... beep", time.Now())
