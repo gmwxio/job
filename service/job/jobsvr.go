@@ -65,7 +65,12 @@ func (ls *LogSvr) GetStream(req *api.LogStreamReq, resp api.Log_GetStreamServer)
 		return errors.New("job id is out of bounds")
 	}
 	jb := jobs[req.Id-1]
-	jb.logClient = make(chan string, 1) // buffer size is 1 so run doesn't hang when this terminates
+	jmu.Lock()
+	if jb.logClient != nil {
+		return errors.New("client already listening to log")
+	}
+	jb.logClient = make(chan string, 0)
+	jmu.Unlock()
 	defer func() {
 		jb.logClient = nil
 	}()
@@ -84,16 +89,21 @@ func (jb *job) run() {
 		line := fmt.Sprintf("At the beep the time will be %v, ... beep", time.Now())
 		log.Printf("%d: %s", jb.ID, line)
 		jb.Logs = append(jb.Logs, line)
-		select {
-		case jb.logClient <- line:
-		default:
+		if jb.logClient != nil {
+			jb.logClient <- line
 		}
+		// select {
+		// case jb.logClient <- line:
+		// default:
+		// }
 		<-time.After(1 * time.Second)
 		i++
-		if i >= 10 {
+		if i >= 4 {
 			break
 		}
 	}
-	close(jb.logClient)
+	if jb.logClient != nil {
+		close(jb.logClient)
+	}
 	jb.Status = api.JobStatus_finished
 }

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sync"
+	"time"
 
 	"github.com/wxio/job/api"
 	"google.golang.org/grpc"
@@ -32,25 +34,32 @@ func main() {
 		log.Fatalf("init failed: %v", err)
 	}
 	fmt.Printf("job init resp %v\n", initResp)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		lc_stream, err := logclient.GetStream(context.Background(), &api.LogStreamReq{Id: initResp.Id})
+		if err != nil {
+			log.Fatalf("get stream: %v", err)
+		}
+		for {
+			lsr, err := lc_stream.Recv()
+			if err == io.EOF {
+				fmt.Printf("------------------\n")
+				break
+			}
+			if err != nil {
+				log.Fatalf("in stream: %v", err)
+			}
+			fmt.Printf("%d : %s\n", initResp.Id, lsr.Line)
+		}
+		wg.Done()
+	}()
+	<-time.After(1 * time.Second)
 	_, err = jobclient.Run(context.Background(), &api.RunReq{Id: initResp.Id})
 	if err != nil {
 		log.Fatalf("run failed: %v", err)
 	}
-	lc_stream, err := logclient.GetStream(context.Background(), &api.LogStreamReq{Id: initResp.Id})
-	if err != nil {
-		log.Fatalf("get stream: %v", err)
-	}
-	for {
-		lsr, err := lc_stream.Recv()
-		if err == io.EOF {
-			fmt.Printf("------------------\n")
-			break
-		}
-		if err != nil {
-			log.Fatalf("in stream: %v", err)
-		}
-		fmt.Printf("%d : %s\n", initResp.Id, lsr.Line)
-	}
+	wg.Wait()
 	lresp, err := logclient.Get(context.Background(), &api.LogReq{Id: initResp.Id})
 	if err != nil {
 		log.Fatalf("get log: %v", err)
@@ -59,5 +68,4 @@ func main() {
 	for _, line := range lresp.Lines {
 		fmt.Println(line)
 	}
-
 }
