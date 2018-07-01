@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package api;
+
+service Job {
+    rpc Init(InitReq) returns (InitResp) {}
+    rpc Run(RunReq) returns (RunResp) {}
+}
+
+service Log {
+    rpc Get(LogReq) returns (LogResp) {}
+    rpc GetStream(LogStreamReq) returns (stream LogStreamResp) {}
+}
+
+message InitReq {
+}
+
+message InitResp {
+    uint32 id = 1;
+}
+
+message RunReq {
+    uint32 id = 1;
+}
+
+message RunResp {
+}
+
+message LogReq {
+    uint32 id = 1;
+}
+message LogResp {
+    repeated string lines = 1;
+}
+message LogStreamReq {
+    uint32 id = 1;
+}
+message LogStreamResp {
+    string line = 1;
+}
