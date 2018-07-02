@@ -17,6 +17,23 @@ const (
 )
 
 func main() {
+	var wg sync.WaitGroup
+	i := 0
+	for {
+		if i > 9 {
+			break
+		}
+		wg.Add(1)
+		go func() {
+			client()
+			wg.Done()
+		}()
+		i++
+	}
+	wg.Wait()
+}
+
+func client() {
 	conn, err := grpc.Dial(jobSvrAddress, grpc.WithInsecure())
 	if err != nil {
 		log.Fatalf("could not connect: %v", err)

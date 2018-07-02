@@ -19,26 +19,102 @@ type LogSvr struct {
 var _ api.JobServer = &JobSvr{}
 var _ api.LogServer = &LogSvr{}
 
-type job struct {
-	ID        uint32
-	Status    api.JobStatus
-	Logs      []string
-	logClient chan string
+type jobSvc struct {
+	run chan struct {
+	}
+	listen chan struct {
+		ctx      context.Context
+		listener chan string
+	}
+	logs chan struct {
+		resp chan struct {
+			logs   []string
+			status api.JobStatus
+		}
+	}
+}
+
+func newJob(id uint32) *jobSvc {
+	js := &jobSvc{
+		run: make(chan struct{}),
+		listen: make(chan struct {
+			ctx      context.Context
+			listener chan string
+		}),
+		logs: make(chan struct {
+			resp chan struct {
+				logs   []string
+				status api.JobStatus
+			}
+		}),
+	}
+	go func() {
+		var (
+			status    api.JobStatus
+			logs      []string
+			listeners []struct {
+				ctx      context.Context
+				listener chan string
+			}
+		)
+		ticker := (<-chan time.Time)(nil)
+		i := 0
+		for {
+			select {
+			case <-ticker:
+				line := fmt.Sprintf("At the beep the time will be %v, ... beep", time.Now())
+				log.Printf("%d: %s", id, line)
+				logs = append(logs, line)
+				for _, li := range listeners {
+					select {
+					case <-li.ctx.Done():
+					case li.listener <- line:
+					}
+				}
+				i++
+				if i >= 4 {
+					ticker = nil
+					status = api.JobStatus_finished
+					for _, li := range listeners {
+						select {
+						case <-li.ctx.Done():
+						default:
+							close(li.listener)
+						}
+					}
+				}
+			case <-js.run:
+				status = api.JobStatus_running
+				ticker = time.Tick(1 * time.Second)
+			case li := <-js.listen:
+				listeners = append(listeners, li)
+			case client := <-js.logs:
+				client.resp <- struct {
+					logs   []string
+					status api.JobStatus
+				}{
+					logs:   logs,
+					status: status,
+				}
+			}
+		}
+	}()
+	return js
 }
 
 var (
-	jobs = make([]*job, 0)
+	jobs = make([]*jobSvc, 0)
 	jmu  sync.Mutex
 )
 
 func (ps *JobSvr) Init(ctx context.Context, req *api.InitReq) (*api.InitResp, error) {
-	jb := &job{}
 	jmu.Lock()
 	defer jmu.Unlock()
-	jobs = append(jobs, jb)
-	jb.ID = uint32(len(jobs))
-	return &api.InitResp{Id: jb.ID}, nil
+	id := uint32(len(jobs)) + 1
+	jobs = append(jobs, newJob(id))
+	return &api.InitResp{Id: id}, nil
 }
+
 func (ps *JobSvr) Run(ctx context.Context, req *api.RunReq) (*api.RunResp, error) {
 	jmu.Lock()
 	if req.Id > uint32(len(jobs)) {
@@ -47,7 +123,8 @@ func (ps *JobSvr) Run(ctx context.Context, req *api.RunReq) (*api.RunResp, error
 	}
 	jb := jobs[req.Id-1]
 	jmu.Unlock()
-	go jb.run()
+	fmt.Printf("1--- %v\n", *jb)
+	jb.run <- struct{}{}
 	return &api.RunResp{}, nil
 }
 
@@ -58,13 +135,27 @@ func (ls *LogSvr) Get(ctx context.Context, req *api.LogReq) (*api.LogResp, error
 		return nil, errors.New("job id is out of bounds")
 	}
 	jb := jobs[req.Id-1]
-	resp := &api.LogResp{
-		Lines:  jb.Logs,
-		Status: jb.Status,
-	}
 	jmu.Unlock()
-	return resp, nil
+	respChan := make(chan struct {
+		logs   []string
+		status api.JobStatus
+	})
+	jb.logs <- struct {
+		resp chan struct {
+			logs   []string
+			status api.JobStatus
+		}
+	}{
+		resp: respChan,
+	}
+	resp := <-respChan
+	logResp := &api.LogResp{
+		Lines:  resp.logs,
+		Status: resp.status,
+	}
+	return logResp, nil
 }
+
 func (ls *LogSvr) GetStream(req *api.LogStreamReq, resp api.Log_GetStreamServer) error {
 	jmu.Lock()
 	if req.Id > uint32(len(jobs)) {
@@ -72,48 +163,21 @@ func (ls *LogSvr) GetStream(req *api.LogStreamReq, resp api.Log_GetStreamServer)
 		return errors.New("job id is out of bounds")
 	}
 	jb := jobs[req.Id-1]
-	if jb.logClient != nil {
-		jmu.Unlock()
-		return errors.New("client already listening to log")
-	}
-	jb.logClient = make(chan string, 0)
 	jmu.Unlock()
-	defer func() {
-		jmu.Lock()
-		jb.logClient = nil
-		jmu.Unlock()
-	}()
-	for line := range jb.logClient {
+
+	logChan := make(chan string)
+	jb.listen <- struct {
+		ctx      context.Context
+		listener chan string
+	}{
+		ctx:      context.Background(),
+		listener: logChan,
+	}
+	for line := range logChan {
 		err := resp.Send(&api.LogStreamResp{Line: line})
 		if err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (jb *job) run() {
-	jb.Status = api.JobStatus_running
-	i := 0
-	for {
-		line := fmt.Sprintf("At the beep the time will be %v, ... beep", time.Now())
-		log.Printf("%d: %s", jb.ID, line)
-		jb.Logs = append(jb.Logs, line)
-		if jb.logClient != nil {
-			jb.logClient <- line
-		}
-		// select {
-		// case jb.logClient <- line:
-		// default:
-		// }
-		<-time.After(1 * time.Second)
-		i++
-		if i >= 4 {
-			break
-		}
-	}
-	if jb.logClient != nil {
-		close(jb.logClient)
-	}
-	jb.Status = api.JobStatus_finished
 }
